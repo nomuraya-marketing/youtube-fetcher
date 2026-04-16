@@ -1,0 +1,5 @@
+.env
+data/transcripts/
+__pycache__/
+.venv/
+*.pyc
