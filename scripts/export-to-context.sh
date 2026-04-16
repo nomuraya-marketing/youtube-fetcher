@@ -76,3 +76,9 @@ with open(jsonl_path, encoding='utf-8') as f:
 
 print(f"[export] 完了: {exported}件")
 PYEOF
+
+# エクスポート後にチャンク分割を実行
+if [[ -f "$MARKETING_CONTEXT_PATH/scripts/build-chunks.sh" ]]; then
+  echo "[export] チャンク分割を実行中..."
+  bash "$MARKETING_CONTEXT_PATH/scripts/build-chunks.sh"
+fi
