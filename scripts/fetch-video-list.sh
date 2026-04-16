@@ -23,28 +23,59 @@ echo "[fetch-video-list] 動画リストを取得中: $CHANNEL_URL"
 
 # yt-dlp でチャンネルの全動画メタデータをJSONLで取得
 # --flat-playlist: メタデータのみ（ダウンロードなし）
-# --print-json: 各動画をJSON1行で出力
+# --dump-json: 各動画をJSONで出力（タイトルにタブ・改行が含まれても安全）
+TMPJSONL=$(mktemp)
+trap 'rm -f "$TMPJSONL"' EXIT
+
 yt-dlp \
   --flat-playlist \
-  --print "%(id)s\t%(title)s\t%(upload_date)s\t%(duration)s\t%(view_count)s" \
+  --dump-json \
   "$CHANNEL_URL/videos" \
-  2>/dev/null \
-| while IFS=$'\t' read -r id title upload_date duration view_count; do
-    # 既に取得済みかチェック
-    if [[ -f "$VIDEO_LIST" ]] && grep -q "\"id\":\"$id\"" "$VIDEO_LIST" 2>/dev/null; then
-      continue
-    fi
-    # JSONL形式で追記
-    printf '{"id":"%s","title":%s,"upload_date":"%s","duration":%s,"view_count":%s,"url":"https://www.youtube.com/watch?v=%s","transcript_fetched":false}\n' \
-      "$id" \
-      "$(echo "$title" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().rstrip()))')" \
-      "$upload_date" \
-      "${duration:-0}" \
-      "${view_count:-0}" \
-      "$id" \
-    >> "$VIDEO_LIST"
-    echo "[fetch-video-list] 追加: $id - $title"
-  done
+  2>/dev/null > "$TMPJSONL"
+
+python3 <<PYEOF
+import json, os
+
+video_list_path = "$VIDEO_LIST"
+tmp_path = "$TMPJSONL"
+
+# 既存IDを読み込む
+existing_ids = set()
+if os.path.exists(video_list_path):
+    with open(video_list_path, encoding='utf-8') as f:
+        for line in f:
+            try:
+                obj = json.loads(line)
+                existing_ids.add(obj['id'])
+            except Exception:
+                pass
+
+added = 0
+with open(video_list_path, 'a', encoding='utf-8') as out, open(tmp_path, encoding='utf-8') as inp:
+    for line in inp:
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        video_id = d.get('id', '')
+        if not video_id or video_id in existing_ids:
+            continue
+        record = {
+            'id': video_id,
+            'title': d.get('title', ''),
+            'upload_date': d.get('upload_date', ''),
+            'duration': d.get('duration', 0),
+            'view_count': d.get('view_count', 0),
+            'url': f"https://www.youtube.com/watch?v={video_id}",
+            'transcript_fetched': False,
+        }
+        out.write(json.dumps(record, ensure_ascii=False) + '\n')
+        existing_ids.add(video_id)
+        added += 1
+        print(f"[fetch-video-list] 追加: {video_id} - {record['title'][:40]}")
+
+print(f"[fetch-video-list] 新規追加: {added}件")
+PYEOF
 
 TOTAL=$(wc -l < "$VIDEO_LIST" | tr -d ' ')
 echo "[fetch-video-list] 完了: 合計 $TOTAL 件"
