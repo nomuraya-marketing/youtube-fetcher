@@ -53,12 +53,43 @@ fi
 
 # VTT → プレーンテキスト変換
 # aranobot方式: set で完全一致重複除去 + 改行なし連結
-# 細切れ行を1本の連続テキストにすることでトークン数を削減
-python3 - "$VTT_FILE" "$TRANSCRIPT_FILE" <<'PYEOF'
+# 細切れ行を1本の連続テキストにしてからbudoux分かち書き+定型句除去
+MARKETING_CONTEXT_PATH="${MARKETING_CONTEXT_PATH:-$REPO_ROOT/../marketing-context}"
+if [[ -f "$REPO_ROOT/.env" ]]; then
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/.env"
+fi
+# 相対パスを絶対パスに解決
+MARKETING_CONTEXT_PATH="$(cd "$MARKETING_CONTEXT_PATH" 2>/dev/null && pwd || echo "")"
+VENV_PYTHON=""
+if [[ -n "$MARKETING_CONTEXT_PATH" && -f "$MARKETING_CONTEXT_PATH/.venv/bin/python3" ]]; then
+  VENV_PYTHON="$MARKETING_CONTEXT_PATH/.venv/bin/python3"
+fi
+if [[ -z "$VENV_PYTHON" ]]; then
+  VENV_PYTHON="python3"
+fi
+
+"$VENV_PYTHON" - "$VTT_FILE" "$TRANSCRIPT_FILE" <<'PYEOF'
 import sys, re
 
 vtt_file = sys.argv[1]
 out_file = sys.argv[2]
+
+# チャンネル固有の定型句パターン（マーケティング侍）
+# 注意: YouTube自動字幕はWhisperエラーで文字化けが多い（例: 戦国自体→戦国時代）
+# 実測パターンと標準形の両方を網羅する
+BOILERPLATE_PATTERNS = [
+    # イントロ定型句（実測バリエーション + 標準形）
+    r'時は令和ビジネス戦国.{0,5}ビジネスの常識を.{0,10}切るマーケティング侍の非常識なビジネス.{0,5}',
+    r'時は令和ビジネス戦国.{0,5}マーケティング侍の非常識なビジネス.{0,5}',
+    # 自己紹介定型句
+    r'マーケティング侍の.{0,5}(り|龍|竜)です',
+    r'ちゃ?お?マーケティング侍',
+    r'このチャンネルでは.{0,10}(実践的な|今すぐ使える).{0,20}マーケティングを.{0,20}(シェア|公開)',
+    # アウトロ定型句
+    r'チャンネル登録よろしくお願いします',
+    r'いいね.{0,3}ボタン.{0,5}押して.{0,20}',
+]
 
 with open(vtt_file, encoding='utf-8') as f:
     content = f.read()
@@ -87,12 +118,33 @@ for line in lines:
     texts.append(line)
 
 # 改行なし連結（細切れ行を1本のテキストに）
-result = ''.join(texts)
+joined = ''.join(texts)
 
+# 定型句除去
+cleaned = joined
+for pat in BOILERPLATE_PATTERNS:
+    cleaned = re.sub(pat, '', cleaned)
+# 連続スペース除去
+cleaned = re.sub(r'\s{2,}', '', cleaned)
+
+# budoux 分かち書き（インストール済みの場合のみ適用）
+try:
+    import budoux
+    parser = budoux.load_default_japanese_parser()
+    # budoux で文境界を検出して改行挿入
+    words = parser.parse(cleaned)
+    result = '\n'.join(words)
+    budoux_applied = True
+except ImportError:
+    result = cleaned
+    budoux_applied = False
+
+removed_chars = len(joined) - len(cleaned)
 with open(out_file, 'w', encoding='utf-8') as f:
     f.write(result)
 
-print(f"[fetch-transcript] 変換完了: {len(texts)}ユニーク行 → {len(result)}文字")
+budoux_note = "(budoux分かち書き適用)" if budoux_applied else "(budoux未インストール)"
+print(f"[fetch-transcript] 変換完了: {len(texts)}ユニーク行 → {len(result)}文字 (定型句除去: {removed_chars}文字) {budoux_note}")
 PYEOF
 
 echo "[fetch-transcript] 保存: $TRANSCRIPT_FILE"
