@@ -52,7 +52,8 @@ if [[ -z "$VTT_FILE" ]]; then
 fi
 
 # VTT → プレーンテキスト変換
-# タイムスタンプ・WEBVTT行・空行を除去し、重複行を削除
+# aranobot方式: set で完全一致重複除去 + 改行なし連結
+# 細切れ行を1本の連続テキストにすることでトークン数を削減
 python3 - "$VTT_FILE" "$TRANSCRIPT_FILE" <<'PYEOF'
 import sys, re
 
@@ -62,30 +63,36 @@ out_file = sys.argv[2]
 with open(vtt_file, encoding='utf-8') as f:
     content = f.read()
 
-# VTTヘッダー・タイムスタンプ・NOTE行を除去
 lines = content.splitlines()
-text_lines = []
-prev = ""
+seen = set()
+texts = []
+
 for line in lines:
-    line = line.strip()
-    if not line:
+    # タイムコード・ヘッダー・空行をスキップ
+    if re.match(r'^\d{2}:\d{2}', line):
         continue
-    if line.startswith("WEBVTT") or line.startswith("NOTE") or line.startswith("Kind:") or line.startswith("Language:"):
+    if line.startswith('WEBVTT') or line.startswith('Kind:') or line.startswith('Language:') or line.startswith('NOTE'):
         continue
-    if re.match(r'^\d{2}:\d{2}:\d{2}', line) or re.match(r'^[\d:.]+ --> ', line):
-        continue
-    # HTMLタグ除去
+    # インラインタイムコード・HTMLタグ除去
+    line = re.sub(r'<\d{2}:\d{2}:\d{2}\.\d{3}>', '', line)
     line = re.sub(r'<[^>]+>', '', line)
-    # 重複行スキップ
-    if line == prev:
+    line = re.sub(r'align:.*$', '', line)
+    line = line.strip()
+    if not line or line in seen:
         continue
-    text_lines.append(line)
-    prev = line
+    # [音楽]等のメタ表記をスキップ
+    if re.match(r'^\[.+\]$', line):
+        continue
+    seen.add(line)
+    texts.append(line)
+
+# 改行なし連結（細切れ行を1本のテキストに）
+result = ''.join(texts)
 
 with open(out_file, 'w', encoding='utf-8') as f:
-    f.write('\n'.join(text_lines))
+    f.write(result)
 
-print(f"[fetch-transcript] 変換完了: {len(text_lines)}行")
+print(f"[fetch-transcript] 変換完了: {len(texts)}ユニーク行 → {len(result)}文字")
 PYEOF
 
 echo "[fetch-transcript] 保存: $TRANSCRIPT_FILE"
