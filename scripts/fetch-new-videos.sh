@@ -44,7 +44,9 @@ PROCESSED=0
 
 echo "$PENDING" | head -n "$MAX_PER_RUN" | while read -r video_id; do
   echo "---"
-  bash "$SCRIPT_DIR/fetch-transcript.sh" "$video_id"
+  # add-video.sh: fetch → export → db-upsert まで1動画ごとに完結
+  # これにより途中で止まっても取得済み分はDBに反映されている
+  bash "$SCRIPT_DIR/add-video.sh" "$video_id" || echo "[fetch-new-videos] 失敗（スキップ）: $video_id"
   PROCESSED=$((PROCESSED + 1))
   # YouTube のレート制限を避けるため少し待つ
   sleep 2
