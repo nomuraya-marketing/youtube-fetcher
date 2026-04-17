@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# export-to-context.sh
+# export-to-context.sh [VIDEO_ID]
 # 取得済みトランスクリプトをmarketing-contextリポジトリ形式に変換してコピー
+# VIDEO_IDを指定すると1動画のみ処理。省略すると未エクスポート全件を処理。
 # LLMによる要約はmarketing-context側で行う（このスクリプトはLLM不使用）
+# チャンク分割・DB更新は呼び出し元（add-video.sh等）で行う。
 
 set -euo pipefail
 
@@ -10,6 +12,8 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 DATA_DIR="$REPO_ROOT/data"
 VIDEO_LIST="$DATA_DIR/video-list.jsonl"
 TRANSCRIPT_DIR="$DATA_DIR/transcripts"
+
+TARGET_VIDEO_ID="${1:-}"
 
 # .envからCONTEXT_PATHを読み込む
 MARKETING_CONTEXT_PATH="${MARKETING_CONTEXT_PATH:-../marketing-context}"
@@ -26,21 +30,25 @@ if [[ ! -f "$VIDEO_LIST" ]]; then
   exit 1
 fi
 
-EXPORTED=0
-python3 - "$VIDEO_LIST" "$TRANSCRIPT_DIR" "$CONTEXT_RAW_DIR" <<'PYEOF'
-import json, sys, os, shutil
+python3 - "$VIDEO_LIST" "$TRANSCRIPT_DIR" "$CONTEXT_RAW_DIR" "$TARGET_VIDEO_ID" <<'PYEOF'
+import json, sys, os
 
 jsonl_path = sys.argv[1]
 transcript_dir = sys.argv[2]
 context_dir = sys.argv[3]
+target_id = sys.argv[4]  # 空文字なら全件
 
 exported = 0
 with open(jsonl_path, encoding='utf-8') as f:
     for line in f:
         obj = json.loads(line)
         video_id = obj['id']
-        transcript_file = os.path.join(transcript_dir, f"{video_id}.txt")
 
+        # VIDEO_ID指定時は対象のみ処理
+        if target_id and video_id != target_id:
+            continue
+
+        transcript_file = os.path.join(transcript_dir, f"{video_id}.txt")
         if not os.path.exists(transcript_file):
             continue
 
@@ -51,10 +59,10 @@ with open(jsonl_path, encoding='utf-8') as f:
             continue
 
         dest_path = os.path.join(context_dir, f"{video_id}.json")
-        if os.path.exists(dest_path):
-            continue  # 既にエクスポート済み
+        if os.path.exists(dest_path) and not target_id:
+            continue  # 全件モードでは既エクスポート済みをスキップ
+        # VIDEO_ID指定時は強制上書き（再エクスポート）
 
-        # メタデータ+トランスクリプトをJSONで保存
         with open(transcript_file, encoding='utf-8') as tf:
             transcript_text = tf.read()
 
@@ -76,9 +84,3 @@ with open(jsonl_path, encoding='utf-8') as f:
 
 print(f"[export] 完了: {exported}件")
 PYEOF
-
-# エクスポート後にチャンク分割を実行
-if [[ -f "$MARKETING_CONTEXT_PATH/scripts/build-chunks.sh" ]]; then
-  echo "[export] チャンク分割を実行中..."
-  bash "$MARKETING_CONTEXT_PATH/scripts/build-chunks.sh"
-fi
