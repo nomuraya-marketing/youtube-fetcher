@@ -24,14 +24,18 @@ echo "[fetch-video-list] 動画リストを取得中: $CHANNEL_URL"
 # yt-dlp でチャンネルの全動画メタデータをJSONLで取得
 # --flat-playlist: メタデータのみ（ダウンロードなし）
 # --dump-json: 各動画をJSONで出力（タイトルにタブ・改行が含まれても安全）
+# /videos と /shorts の両タブを取得（YouTubeはタブごとに分かれているため）
 TMPJSONL=$(mktemp)
 trap 'rm -f "$TMPJSONL"' EXIT
 
-yt-dlp \
-  --flat-playlist \
-  --dump-json \
-  "$CHANNEL_URL/videos" \
-  2>/dev/null > "$TMPJSONL"
+for TAB in videos shorts; do
+  echo "[fetch-video-list] タブ取得: $TAB"
+  yt-dlp \
+    --flat-playlist \
+    --dump-json \
+    "$CHANNEL_URL/$TAB" \
+    2>/dev/null >> "$TMPJSONL" || true
+done
 
 python3 <<PYEOF
 import json, os
